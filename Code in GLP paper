@@ -1,0 +1,178 @@
+# import R package
+library(Seurat)
+library(ggplot2)
+library(RColorBrewer)
+library(dplyr)
+library(plotly)
+library(factoextra)
+library(cluster)
+library(SCMarker)
+library(M3Drop)
+library(flexclust)
+library(stringdist)
+library(car)
+library(geneBasisR)
+library(SingleCellExperiment)
+library(FEAST)
+library(HighlyRegionalGenes)
+library(aricode)
+library(clusterSim)
+library(pheatmap)
+library(UpSetR)
+library(viridis)
+library(GLP)
+
+
+
+#read data and feature selection(other methods)
+for(j in 1:length(datafile)){
+#################################################   read data
+    wd <- paste0("/DATA/TLS/Users/xieyue/01LPR/01figure/10Final_result_V2/01scRNA/02OtherMethods/", datafile[j])
+    if(!dir.exists(wd)){
+        dir.create(wd)
+    }
+    setwd(wd)
+
+    data <- readRDS(paste0(inpath, datafile[j], "/", dataname[j], ".rds"))
+    data
+
+    counts <- data@assays$RNA@counts
+    true_label <- data$annotation
+    nct <- length(unique(true_label))
+    
+    genes_selected <- list()
+    time <- list()
+###############################################    feature selection
+    for (i in c("SCMarker", "M3Drop", 'NBDrop', "HVG", "SCT", "genebasisR", "FEAST", "HRG")){
+        if(i == "SCMarker"){
+            t <- system.time(genes_selected[[i]] <- scmarker.fs(counts))
+            time[[i]] <- t
+            print(paste0("Finish computing:", i))
+        } 
+        else if(i == "M3Drop"){
+            t <- system.time(genes_selected[[i]] <- m3drop.fs(counts))
+            time[[i]] <- t
+            print(paste0("Finish computing:", i))
+        }
+        else if(i == "NBDrop"){
+            t <- system.time(genes_selected[[i]] <- nbdrop.fs(counts))
+            time[[i]] <- t
+            print(paste0("Finish computing:", i))
+        }
+        else if(i == "HVG"){
+            t <- system.time(genes_selected[[i]] <- hvg.fs(counts))
+            time[[i]] <- t
+            print(paste0("Finish computing:", i))
+        }
+        else if(i == "SCT"){
+            t <- system.time(genes_selected[[i]] <- sct.fs(counts))
+            time[[i]] <- t
+            print(paste0("Finish computing:", i))
+        }
+        else if(i == "genebasisR"){
+            t <- system.time(genes_selected[[i]] <- genebasisr.fs(counts))
+            time[[i]] <- t
+            print(paste0("Finish computing:", i))
+        }
+        else if(i == "FEAST"){
+            t <- system.time(genes_selected[[i]] <- feast.fs(counts,k=nct))
+            time[[i]] <- t
+            print(paste0("Finish computing:", i))
+        }
+        else if(i == "HRG"){
+            t <- system.time(genes_selected[[i]] <- hrg.fs(counts))
+            time[[i]] <- t
+            print(paste0("Finish computing:", i))
+        }
+    }
+    save(genes_selected, file = "Gene_Selected.RData")
+    save(time, file = "Time.RData")
+}
+
+
+
+#feature selection(GLP)
+glp.t <- system.time(df <- calculate_gpr(counts)
+                     glp.hvg <- glp(df))
+time[['GLP']] <- glp.t
+
+#cluster
+obj <- Cluster(counts, gene_subset, res=res)
+
+
+#evaluation
+obj$anno <- data$annotation
+ari <- round(ARI(true_label, obj$seurat_clusters), 3)
+nmi <- round(NMI(true_label, obj$seurat_clusters), 3)
+sil_temp <- silhouette(as.integer(obj$seurat_clusters), dist(obj@reductions$umap@cell.embeddings))
+sil <- round(mean(sil_temp[, "sil_width"]),3)
+
+
+#time statistic
+time.df <- data.frame(row.names=c('SCMarker','M3Drop','NBDrop','HVG','SCT','genebasisR','FEAST','HRG','GLP'))
+time.df[,'Datasets'] <- dn
+time.df[,'Methods'] <- c('SCMarker','M3Drop','NBDrop','HVG','SCT','genebasisR','FEAST','HRG','GLP')
+time.df[,'nCells'] <- ncol(obj)
+time.df[,'nGenes'] <- nrow(obj)
+time.df['SCMarker','Relapsed_Time'] <- time$SCMarker[1]
+time.df['M3Drop','Relapsed_Time'] <- time$M3Drop[1]
+time.df['NBDrop','Relapsed_Time'] <- time$NBDrop[1]
+time.df['HVG','Relapsed_Time'] <- time$HVG[1]
+time.df['SCT','Relapsed_Time'] <- time$SCT[1]
+time.df['genebasisR','Relapsed_Time'] <- time$genebasisR[1]
+time.df['FEAST','Relapsed_Time'] <- time$FEAST[1]
+time.df['HRG','Relapsed_Time'] <- time$HRG[1]
+time.df['GLP','Relapsed_Time'] <- time$GLP[1]
+tdf <- rbind(tdf, time.df)
+
+tdf$Methods <- factor(tdf$Methods, levels = c("GLP", "FEAST", 'genebasisR', "HVG", "SCT", "M3Drop", 'NBDrop', "HRG", "SCMarker"))
+tdf.s <- aggregate(tdf$Relapsed_Time, by=list(tdf$Methods), mean)
+colnames(tdf.s) <- c("Methods", "Relapsed_Time")
+tdf.s <- tdf.s[order(tdf.s$Relapsed_Time),]
+
+pdf("time_boxplot.pdf")
+ggplot(tdf, aes(x=Methods, y=Relapsed_Time, fill= Methods)) + geom_boxplot(outlier.shape = NA)  +
+    scale_fill_manual(values = col.df[levels(tdf$Methods),'color'])+ 
+    theme(axis.title.x = element_text(size=20),
+         axis.text.x = element_text(size=15, angle = 45, hjust = 0.9),
+         axis.title.y = element_text(size=20),
+            axis.text.y = element_text(size=15),
+          legend.position = "right",
+          panel.grid = element_blank(),
+          panel.background = element_rect(fill="white", color="black")) + 
+          coord_cartesian(ylim = c(0, 1500)) +
+          geom_hline(aes(yintercept = 60), color="red", linetype="dashed")
+dev.off()
+
+tdf.wide <- reshape2::dcast(tdf, Datasets~Methods, value.var = "Relapsed_Time")
+lpm.tdf <- subset(tdf, Methods == "GLP")
+cor.test(lpm.tdf$nCells, lpm.tdf$Relapsed_Time, method = "spearman")
+
+pdf("ncell_time.pdf")
+ggplot(lpm.tdf, aes(x=nCells, y=Relapsed_Time)) + geom_point(size=3)+ 
+    theme(axis.title.x = element_text(size=20),
+         axis.text.x = element_text(size=15, angle = 45, hjust = 0.9),
+         axis.title.y = element_text(size=20),
+            axis.text.y = element_text(size=15),
+          legend.position = "right",
+          panel.grid = element_blank(),
+          panel.background = element_rect(fill="white", color="black")) 
+dev.off()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
